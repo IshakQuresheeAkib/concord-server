@@ -4,10 +4,12 @@ require('dotenv').config();
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const jwt = require('jsonwebtoken')
 const cookieParser = require('cookie-parser')
-
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY)
+const ball = '';
 const port = process.env.PORT || 5000;
 const app = express()
- 
+const punycode = require('punycode');
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.vuba6ki.mongodb.net/?retryWrites=true&w=majority`;
 
 app.use(cors({
@@ -42,8 +44,6 @@ const verify = async (req,res,next)=>{
   
 }
 
-
-
 async function run() {
 try {
 
@@ -51,6 +51,8 @@ try {
     const biodatasCollection = client.db('concordDB').collection('biodatas')
     const favouriteCollection = client.db('concordDB').collection('favorites')
     const premiumRequestCollection = client.db('concordDB').collection('premiumRequest')
+    const contactRequestCollection = client.db('concordDB').collection('contactRequests')
+    const successStoriesCollection = client.db('concordDB').collection('successStories')
 
     app.get('/', (req, res) => {
         res.send('Hello World!')
@@ -198,7 +200,7 @@ try {
         return res.send({message:'Exist',status:403})
     })
 
-    app.get('/favorites-biodata',async(req,res)=>{
+    app.get('/favorites-biodata',verify,async(req,res)=>{
         const {email} = req.query
         console.log(email);
         const query = {userEmail: email}
@@ -296,6 +298,65 @@ try {
         }
         const result = await userCollection.updateOne(filter,updatedUser)
         res.send(result)
+    })
+
+    // payment intent
+    app.post('/create-payment-intent',async(req,res)=>{
+        const { price } = req.body;
+        const amount = parseInt(price * 100)
+        const paymentIntent = await stripe.paymentIntents.create({
+            amount:amount,
+            currency:'usd',
+            payment_method_types:['card']
+        }) 
+        res.send({
+            clientSecret : paymentIntent.client_secret
+        })
+    })
+    
+    app.post('/contact-request',async(req,res)=>{
+        const biodataInfo = req.body;
+        console.log(biodataInfo);
+        const result = await contactRequestCollection.insertOne(biodataInfo)
+        res.send(result)
+    })
+
+    app.get('/contact-request',verify,async(req,res)=>{
+        
+        const {id,UserEmail} = req.query;
+        const BiodataId = parseInt(id);
+        console.log('data',BiodataId,UserEmail);
+        let query;
+        if (UserEmail && BiodataId) {
+            query = {BiodataId,UserEmail}
+            const biodata = await contactRequestCollection.findOne(query)
+            if (biodata) {
+                res.send({message:'requested'})
+            }
+            return;
+        }else if(UserEmail){
+            query = {UserEmail}
+        }
+        const requests = await contactRequestCollection.find(query).toArray();
+        return res.send(requests)
+    })
+
+    app.patch('/contact-request/:id',async(req,res)=>{
+        const {id} = req?.params
+        const {Status} = req?.body
+        console.log(id,Status);
+        const filter = {_id: new ObjectId(id)}
+        const updateRequest = {
+            $set: {Status}
+        }
+        const result = await contactRequestCollection.updateOne(filter,updateRequest)
+        res.send(result)
+    })
+    
+    app.get('/success-stories',async(req,res)=>{
+        const request = successStoriesCollection.find()
+        const stories = await request.toArray();
+        res.send(stories)
     })
 
     await client.db("admin").command({ ping: 1 });
